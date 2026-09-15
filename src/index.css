@@ -1,1 +1,7 @@
-@import "tailwindcss"
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Hind Siliguri', sans-serif;
+  }
+}
