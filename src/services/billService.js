@@ -9,6 +9,7 @@ import {
   where,
   updateDoc,
   serverTimestamp,
+  orderBy,
 } from "firebase/firestore";
 
 const BILLS_COLLECTION = "bills";
@@ -87,6 +88,75 @@ export const deleteMonthlyBill = async (billId) => {
     return { success: true };
   } catch (error) {
     console.error("Error deleting bill:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Reset a month's record to vacant (clears bills and dues)
+export const clearMonthlyBill = async (billId, roomNo, yearMonth, roomId) => {
+  try {
+    const billsRef = collection(db, "bills");
+    const targetBillId = billId || `${roomNo}_${yearMonth}`;
+    const billDocRef = doc(db, "bills", targetBillId);
+
+    await setDoc(
+      billDocRef,
+      {
+        id: targetBillId,
+        roomNo: String(roomNo),
+        yearMonth: yearMonth,
+        isCleared: true, 
+        isBillFinalized: false,
+        isVacant: true,
+        due: 0,
+        paidAmount: 0,
+        subtotal: 0,
+        totalPayable: 0,
+      },
+      { merge: true },
+    );
+
+    const remainingQuery = query(
+      billsRef,
+      where("roomNo", "==", String(roomNo)),
+    );
+    const remainingSnap = await getDocs(remainingQuery);
+
+    let latestBilledMonth = null;
+    let latestDue = 0;
+    let isFinalized = false;
+
+    const validBills = remainingSnap.docs
+      .map((d) => d.data())
+      .filter(
+        (b) => !b.isDepartureClaim && !b.isCleared && b.yearMonth !== yearMonth,
+      )
+      .sort((a, b) => b.yearMonth.localeCompare(a.yearMonth));
+
+    if (validBills.length > 0) {
+      const latest = validBills[0];
+      latestBilledMonth = latest.yearMonth;
+      latestDue = Number(latest.due) || 0;
+      isFinalized = Boolean(latest.isBillFinalized);
+    }
+
+    if (roomId) {
+      const roomRef = doc(db, "rooms", roomId);
+      await updateDoc(roomRef, {
+        dueBalance: latestDue,
+        isLastBillFinalized: isFinalized,
+        lastBilledMonth: latestBilledMonth,
+      });
+    }
+
+    return {
+      success: true,
+      updatedDue: latestDue,
+      updatedLastBilledMonth: latestBilledMonth,
+      updatedIsFinalized: isFinalized,
+    };
+  } catch (error) {
+    console.error("Error clearing bill:", error);
     return { success: false, error: error.message };
   }
 };

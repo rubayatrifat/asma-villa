@@ -8,36 +8,67 @@ import {
   serverTimestamp,
   updateDoc,
   doc,
+  where,
+  getDocs,
+  writeBatch,
+  deleteDoc,
+  setDoc,
 } from "firebase/firestore";
 
 const ROOMS_COLLECTION = "rooms";
+const BILLS_COLLECTION = "bills";
 
 // Add a new room document
 export const addRoom = async (roomData) => {
   try {
-    const docRef = await addDoc(collection(db, ROOMS_COLLECTION), {
-      roomNo: roomData.roomNo.trim(),
-      rent: Number(roomData.rent),
-      wasteBill: Number(roomData.wasteBill || 60),
-      currentMeterReading: Number(roomData.initialMeterReading || 0),
-      isOccupied: Boolean(roomData.isOccupied),
-      currentTenant: roomData.isOccupied
+    const isOccupied = Boolean(roomData.isOccupied);
+
+    const rawName = roomData.tenantName || roomData.currentTenant?.name || "";
+    const rawPhone =
+      roomData.tenantPhone || roomData.currentTenant?.phone || "";
+    const rawJoinedDate =
+      roomData.joinedDate ||
+      roomData.tenantJoinedDate ||
+      roomData.currentTenant?.joinedDate ||
+      "";
+    const hasWifi = Boolean(
+      roomData.hasWifi ?? roomData.currentTenant?.hasWifi,
+    );
+
+    const formattedData = {
+      roomNo: String(roomData.roomNo || "").trim(),
+      rent: Number(roomData.rent) || 0,
+      initialMeterReading: Number(roomData.initialMeterReading) || 0,
+      currentMeterReading: Number(roomData.initialMeterReading) || 0,
+      wasteBill: Number(roomData.wasteBill) || 60,
+      wifiBill: Number(roomData.wifiBill) || 100,
+      dueBalance: Number(roomData.initialDue || roomData.dueBalance) || 0,
+      isOccupied: isOccupied,
+
+      tenantName: isOccupied ? rawName.trim() : "",
+      tenantPhone: isOccupied ? rawPhone.trim() : "",
+      joinedDate: isOccupied ? rawJoinedDate : null,
+      tenantJoinedDate: isOccupied ? rawJoinedDate : null,
+
+      currentTenant: isOccupied
         ? {
-            name: roomData.tenantName.trim(),
-            phone: roomData.tenantPhone ? roomData.tenantPhone.trim() : "",
-            hasWifi: Boolean(roomData.hasWifi),
-            joinedDate:
-              roomData.joinedDate || new Date().toISOString().split("T")[0],
+            name: rawName.trim(),
+            phone: rawPhone.trim(),
+            joinedDate: rawJoinedDate,
+            hasWifi: hasWifi,
           }
         : null,
-      dueBalance: Number(roomData.initialDue || 0),
-      // Track the last month for which bill was calculated (null means pending)
-      lastBilledMonth: null,
-      createdAt: serverTimestamp(),
-    });
+
+      createdAt: new Date().toISOString(),
+    };
+
+    const docRef = await addDoc(
+      collection(db, ROOMS_COLLECTION),
+      formattedData,
+    );
     return { success: true, id: docRef.id };
   } catch (error) {
-    console.error("Error adding room: ", error);
+    console.error("Error adding room:", error);
     return { success: false, error: error.message };
   }
 };
@@ -54,15 +85,47 @@ export const subscribeRooms = (callback) => {
   });
 };
 
-// Release current tenant and make room vacant
-export const releaseTenant = async (roomId) => {
+// Release Tenant and optionally create a permanent Departure Due Claim record
+export const releaseTenant = async (roomId, roomNo, penaltyData = null) => {
   try {
     const roomRef = doc(db, ROOMS_COLLECTION, roomId);
-    await updateDoc(roomRef, {
+
+    // রুম খালি করে দেওয়া
+    const updatePayload = {
       isOccupied: false,
       currentTenant: null,
-      dueBalance: 0,
-    });
+      tenantName: "",
+      tenantPhone: "",
+      tenantJoinedDate: null,
+      joinedDate: null,
+    };
+
+    await updateDoc(roomRef, updatePayload);
+
+    // যদি ভাড়াটিয়া না জানিয়ে চলে যাওয়ার কারণে কোনো জরিমানা/দাবি থাকে,
+    // তবে তা bills কালেকশনে স্থায়ী রেকর্ড হিসেবে সংরক্ষণ হবে
+    if (
+      penaltyData &&
+      !penaltyData.isWaived &&
+      Number(penaltyData.amount) > 0
+    ) {
+      const claimId = `${roomNo}_${penaltyData.yearMonth}_claim_${Date.now()}`;
+      const claimRef = doc(db, BILLS_COLLECTION, claimId);
+
+      await setDoc(claimRef, {
+        id: claimId,
+        roomNo: String(roomNo),
+        yearMonth: penaltyData.yearMonth,
+        isDepartureClaim: true,
+        tenantName: penaltyData.tenantName || "পূর্ববর্তী ভাড়াটিয়া",
+        claimAmount: Number(penaltyData.amount),
+        paidAmount: 0,
+        due: Number(penaltyData.amount),
+        isPaid: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
     return { success: true };
   } catch (error) {
     console.error("Error releasing tenant:", error);
@@ -70,23 +133,110 @@ export const releaseTenant = async (roomId) => {
   }
 };
 
-// Assign a new tenant to an existing room
-export const assignNewTenant = async (roomId, tenantData) => {
+// Update Claim Payment Status (জরিমানার টাকা জমা বা পরিশোধ নেওয়া)
+export const updateClaimPayment = async (claimId, paidAmount, claimTotal) => {
   try {
-    const roomRef = doc(db, ROOMS_COLLECTION, roomId);
-    await updateDoc(roomRef, {
-      isOccupied: true,
-      currentTenant: {
-        name: tenantData.name.trim(),
-        phone: tenantData.phone ? tenantData.phone.trim() : "",
-        hasWifi: Boolean(tenantData.hasWifi),
-        joinedDate: tenantData.joinedDate || new Date().toISOString().split("T")[0],
-      },
-      dueBalance: 0,
+    const claimRef = doc(db, BILLS_COLLECTION, claimId);
+    const paid = Number(paidAmount);
+    const total = Number(claimTotal);
+    const due = Math.max(0, total - paid);
+
+    await updateDoc(claimRef, {
+      paidAmount: paid,
+      due: due,
+      isPaid: due === 0,
+      paidAt: new Date().toISOString(),
     });
     return { success: true };
   } catch (error) {
+    console.error("Error updating claim payment:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Permanently delete a claim record from history
+export const deleteDepartureClaimDoc = async (claimId) => {
+  try {
+    const claimRef = doc(db, BILLS_COLLECTION, claimId);
+    await deleteDoc(claimRef);
+    return { success: true };
+  } catch (error) {
+    console.error("Error deleting claim document:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Assign a new tenant to an existing room (আগের জরিমানা ও হিস্ট্রি অক্ষত থাকবে)
+export const assignNewTenant = async (roomId, tenantData) => {
+  try {
+    const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+
+    await updateDoc(roomRef, {
+      isOccupied: true,
+      tenantName: tenantData.name.trim(),
+      tenantPhone: tenantData.phone ? tenantData.phone.trim() : "",
+      tenantJoinedDate: tenantData.joinedDate,
+      joinedDate: tenantData.joinedDate,
+      hasWifi: Boolean(tenantData.hasWifi),
+
+      currentTenant: {
+        name: tenantData.name.trim(),
+        phone: tenantData.phone ? tenantData.phone.trim() : "",
+        joinedDate: tenantData.joinedDate,
+        hasWifi: Boolean(tenantData.hasWifi),
+      },
+    });
+
+    return { success: true };
+  } catch (error) {
     console.error("Error assigning tenant:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Update room default pricing and details
+export const updateRoomDetails = async (roomId, updatedData) => {
+  try {
+    const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+    await updateDoc(roomRef, {
+      roomNo: String(updatedData.roomNo).trim(),
+      rent: Number(updatedData.rent),
+      wasteBill: Number(updatedData.wasteBill),
+      wifiBill: Number(updatedData.wifiBill || 100),
+    });
+    return { success: true };
+  } catch (error) {
+    console.error("Error updating room:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Permanently delete a room along with all its linked bills (Cascade Delete)
+export const deleteRoom = async (roomId, roomNo) => {
+  try {
+    const batch = writeBatch(db);
+
+    // 1. Delete the main room document
+    const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+    batch.delete(roomRef);
+
+    // 2. Query and delete all bills related to this roomNo
+    if (roomNo) {
+      const billsQuery = query(
+        collection(db, BILLS_COLLECTION),
+        where("roomNo", "==", String(roomNo)),
+      );
+      const billsSnapshot = await getDocs(billsQuery);
+      billsSnapshot.forEach((billDoc) => {
+        batch.delete(billDoc.ref);
+      });
+    }
+
+    // 3. Commit atomic batch operation
+    await batch.commit();
+    return { success: true };
+  } catch (error) {
+    console.error("Error deleting room and bills:", error);
     return { success: false, error: error.message };
   }
 };

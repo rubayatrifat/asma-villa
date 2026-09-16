@@ -3,7 +3,9 @@ import { X, PlusCircle } from "lucide-react";
 import { addRoom } from "../../services/roomService";
 
 export default function AddRoomModal({ isOpen, onClose }) {
-  const [formData, setFormData] = useState({
+  const getTodayDate = () => new Date().toISOString().split("T")[0];
+
+  const initialFormState = {
     roomNo: "",
     rent: "",
     initialMeterReading: "",
@@ -12,44 +14,54 @@ export default function AddRoomModal({ isOpen, onClose }) {
     tenantName: "",
     tenantPhone: "",
     hasWifi: false,
-    joinedDate: new Date().toISOString().split("T")[0],
-    initialDue: "0", // Outstanding dues if existing tenant
-  });
+    joinedDate: getTodayDate(),
+    initialDue: "0",
+  };
 
+  const [formData, setFormData] = useState(initialFormState);
   const [loading, setLoading] = useState(false);
+
+  const getMaxAllowedDate = () => {
+    const now = new Date();
+    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const y = lastDayOfMonth.getFullYear();
+    const m = String(lastDayOfMonth.getMonth() + 1).padStart(2, "0");
+    const d = String(lastDayOfMonth.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  };
 
   if (!isOpen) return null;
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!formData.roomNo || !formData.rent) {
-      alert("দয়া করে রুম নম্বর ও মাসিক ভাড়া লিখুন!");
+const handleSubmit = async (e) => {
+  e.preventDefault();
+
+  const selectedJoinDate = formData.joinedDate || getTodayDate();
+
+  if (formData.isOccupied && selectedJoinDate) {
+    const maxDate = getMaxAllowedDate();
+    if (selectedJoinDate > maxDate) {
+      alert(
+        "ভবিষ্যতের কোনো তারিখ গ্রহণযোগ্য নয়! শুধুমাত্র অতীত ও চলতি মাস নির্বাচন করতে পারবেন।",
+      );
       return;
     }
+  }
 
-    setLoading(true);
-    const result = await addRoom(formData);
-    setLoading(false);
+  setLoading(true);
+  const result = await addRoom({
+    ...formData,
+    joinedDate: selectedJoinDate,
+    tenantJoinedDate: selectedJoinDate,
+  });
+  setLoading(false);
 
-    if (result.success) {
-      onClose();
-      setFormData({
-        roomNo: "",
-        rent: "",
-        initialMeterReading: "",
-        wasteBill: "60",
-        isOccupied: false,
-        tenantName: "",
-        tenantPhone: "",
-        hasWifi: false,
-        joinedDate: new Date().toISOString().split("T")[0],
-        initialDue: "0",
-      });
-    } else {
-      alert("রুম যোগ করতে সমস্যা হয়েছে: " + result.error);
-    }
-  };
-
+  if (result.success) {
+    setFormData(initialFormState);
+    onClose();
+  } else {
+    alert("রুম যোগ করতে সমস্যা হয়েছে: " + result.error);
+  }
+};
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
       <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
@@ -59,7 +71,7 @@ export default function AddRoomModal({ isOpen, onClose }) {
           </h2>
           <button
             onClick={onClose}
-            className="rounded-lg p-1 text-gray-500 hover:bg-gray-100"
+            className="rounded-lg p-1 text-gray-500 hover:bg-gray-100 transition-all"
           >
             <X className="h-6 w-6" />
           </button>
@@ -184,16 +196,21 @@ export default function AddRoomModal({ isOpen, onClose }) {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700">
-                    ওঠার তারিখ
+                  <label className="block text-xs font-bold text-slate-600 mb-1">
+                    ওঠার তারিখ *
                   </label>
                   <input
                     type="date"
+                    required={formData.isOccupied}
+                    max={getMaxAllowedDate()}
                     value={formData.joinedDate}
                     onChange={(e) =>
-                      setFormData({ ...formData, joinedDate: e.target.value })
+                      setFormData({
+                        ...formData,
+                        joinedDate: e.target.value,
+                      })
                     }
-                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white p-2.5 text-base focus:border-blue-500 focus:outline-none"
+                    className="w-full border border-slate-300 rounded-xl p-2.5 text-sm font-bold text-slate-800 bg-white focus:outline-none focus:border-blue-500"
                   />
                 </div>
               </div>
@@ -233,14 +250,14 @@ export default function AddRoomModal({ isOpen, onClose }) {
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-200"
+              className="rounded-lg bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-all"
             >
               বাতিল
             </button>
             <button
               type="submit"
               disabled={loading}
-              className="flex items-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-blue-700 disabled:opacity-50"
+              className="flex items-center rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-blue-700 disabled:opacity-50 transition-all"
             >
               <PlusCircle className="mr-2 h-4 w-4" />
               {loading ? "সংরক্ষণ হচ্ছে..." : "রুম যোগ করুন"}

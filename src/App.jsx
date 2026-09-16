@@ -4,14 +4,28 @@ import Navbar from "./components/common/Navbar";
 import RoomCard from "./components/rooms/RoomCard";
 import RoomDetails from "./components/rooms/RoomDetails";
 import AddRoomModal from "./components/forms/AddRoomModal";
+import EditRoomModal from "./components/forms/EditRoomModal";
+import Toast from "./components/common/Toast";
 import { subscribeRooms } from "./services/roomService";
 import { toBengaliNumber } from "./utils/formatters";
 
 export default function App() {
   const [rooms, setRooms] = useState([]);
   const [selectedRoom, setSelectedRoom] = useState(null);
+  const [editingRoom, setEditingRoom] = useState(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  const [toast, setToast] = useState({
+    message: "",
+    type: "success",
+    visible: false,
+  });
+
+  const triggerToast = (message, type = "success") => {
+    setToast({ message, type, visible: true });
+    setTimeout(() => setToast((prev) => ({ ...prev, visible: false })), 3000);
+  };
 
   useEffect(() => {
     const unsubscribe = subscribeRooms((data) => {
@@ -29,6 +43,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-gray-900 pb-16">
+      {/* Toast Notification */}
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        isVisible={toast.visible}
+      />
+
       <Navbar />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
@@ -68,7 +89,7 @@ export default function App() {
               <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-gray-300 p-8">
                 <Layers className="mx-auto h-12 w-12 text-gray-300" />
                 <h3 className="mt-3 text-lg font-bold text-gray-800">
-                  কোনো রুম যুক্ত করা হয়নি
+                  কোনো রুম যুক্ত করা হয়নি
                 </h3>
                 <p className="mt-1 text-sm text-gray-500">
                   উপরের বাটনে ক্লিক করে নতুন রুম তৈরি করুন।
@@ -81,6 +102,7 @@ export default function App() {
                     key={room.id}
                     room={room}
                     onSelectRoom={(r) => setSelectedRoom(r)}
+                    onEditRoom={(r) => setEditingRoom(r)}
                   />
                 ))}
               </div>
@@ -89,9 +111,18 @@ export default function App() {
         )}
       </main>
 
+      {/* Add Room Modal */}
       <AddRoomModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
+      />
+
+      {/* Edit & Delete Room Modal */}
+      <EditRoomModal
+        isOpen={Boolean(editingRoom)}
+        room={editingRoom}
+        onClose={() => setEditingRoom(null)}
+        triggerToast={triggerToast}
       />
     </div>
   );
