@@ -4,6 +4,7 @@ import {
   addDoc,
   onSnapshot,
   query,
+  getDoc,
   orderBy,
   serverTimestamp,
   updateDoc,
@@ -102,8 +103,6 @@ export const releaseTenant = async (roomId, roomNo, penaltyData = null) => {
 
     await updateDoc(roomRef, updatePayload);
 
-    // যদি ভাড়াটিয়া না জানিয়ে চলে যাওয়ার কারণে কোনো জরিমানা/দাবি থাকে,
-    // তবে তা bills কালেকশনে স্থায়ী রেকর্ড হিসেবে সংরক্ষণ হবে
     if (
       penaltyData &&
       !penaltyData.isWaived &&
@@ -133,7 +132,6 @@ export const releaseTenant = async (roomId, roomNo, penaltyData = null) => {
   }
 };
 
-// Update Claim Payment Status (জরিমানার টাকা জমা বা পরিশোধ নেওয়া)
 export const updateClaimPayment = async (claimId, paidAmount, claimTotal) => {
   try {
     const claimRef = doc(db, BILLS_COLLECTION, claimId);
@@ -237,6 +235,30 @@ export const deleteRoom = async (roomId, roomNo) => {
     return { success: true };
   } catch (error) {
     console.error("Error deleting room and bills:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+export const updateDepartureClaimAmount = async (claimId, newAmount) => {
+  try {
+    const claimRef = doc(db, "bills", claimId);
+    const snap = await getDoc(claimRef);
+    if (!snap.exists()) return { success: false, error: "রেকর্ড পাওয়া যায়নি!" };
+
+    const currentData = snap.data();
+    const paid = Number(currentData.paidAmount) || 0;
+    const total = Number(newAmount) || 0;
+    const due = Math.max(0, total - paid);
+
+    await updateDoc(claimRef, {
+      claimAmount: total,
+      due: due,
+      isPaid: due === 0,
+      updatedAt: new Date().toISOString(),
+    });
+    return { success: true };
+  } catch (error) {
+    console.error("Error updating claim amount:", error);
     return { success: false, error: error.message };
   }
 };

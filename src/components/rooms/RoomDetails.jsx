@@ -9,16 +9,19 @@ import {
   Calendar,
   Zap,
   CheckCircle2,
+  Edit2,
 } from "lucide-react";
 import {
   releaseTenant,
   assignNewTenant,
   updateClaimPayment,
   deleteDepartureClaimDoc,
+  updateDepartureClaimAmount,
 } from "../../services/roomService";
 import { toBengaliNumber, formatCurrency } from "../../utils/formatters";
 import { calculateProratedRent } from "../../utils/rentCalculators";
 import EditMonthModal from "../forms/EditMonthModal";
+import ClaimActionModal from "../forms/ClaimActionModal";
 import {
   getRoomBills,
   saveMonthlyBill,
@@ -426,22 +429,57 @@ export default function RoomDetails({ room, onBack }) {
     }
   };
 
-  const handleDeleteClaim = async (claimId) => {
-    if (
-      !window.confirm(
-        "আপনি কি নিশ্চিতভাবে এই জরিমানার রেকর্ডটি মুছে ফেলতে চান?",
-      )
-    )
-      return;
-    const res = await deleteDepartureClaimDoc(claimId);
-    if (res.success) {
-      triggerToast("জরিমানার রেকর্ড মুছে ফেলা হয়েছে!");
-      await loadBills();
-    } else {
-      triggerToast("রেকর্ডটি মোছা যায়নি!", "error");
-    }
+  const [claimModal, setClaimModal] = useState({
+    isOpen: false,
+    type: "pay", // 'pay' বা 'edit'
+    claim: null,
+  });
+
+  const handleDeleteClaim = (claim) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: "জরিমানার রেকর্ড মুছে ফেলতে চান?",
+      message: `${claim.tenantName}-এর এই বিশেষ দাবিটি হিস্ট্রি থেকে স্থায়ীভাবে মুছে ফেলা হবে।`,
+      confirmText: "হ্যাঁ, মুছে ফেলুন",
+      isDanger: true,
+      onConfirm: async () => {
+        closeConfirmDialog();
+        const res = await deleteDepartureClaimDoc(claim.id);
+        if (res.success) {
+          triggerToast("জরিমানার রেকর্ড মুছে ফেলা হয়েছে!");
+          await loadBills();
+        } else {
+          triggerToast("রেকর্ডটি মোছা যায়নি!", "error");
+        }
+      },
+    });
   };
 
+  const handleClaimModalConfirm = async (claimId, val) => {
+    if (claimModal.type === "pay") {
+      const res = await updateClaimPayment(
+        claimId,
+        val,
+        claimModal.claim.claimAmount,
+      );
+      if (res.success) {
+        triggerToast("পেমেন্ট সফলভাবে জমা হয়েছে!");
+        setClaimModal({ isOpen: false, type: "pay", claim: null });
+        await loadBills();
+      } else {
+        triggerToast("পেমেন্ট আপডেট করা যায়নি!", "error");
+      }
+    } else {
+      const res = await updateDepartureClaimAmount(claimId, val);
+      if (res.success) {
+        triggerToast("দাবিকৃত টাকার পরিমাণ আপডেট হয়েছে!");
+        setClaimModal({ isOpen: false, type: "edit", claim: null });
+        await loadBills();
+      } else {
+        triggerToast("আপডেট করা যায়নি!", "error");
+      }
+    }
+  };
   const handleAssignTenant = async (e) => {
     e.preventDefault();
 
@@ -562,13 +600,28 @@ export default function RoomDetails({ room, onBack }) {
                       </span>
                     </div>
 
-                    <button
-                      onClick={() => handleDeleteClaim(monthBill.id)}
-                      className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-100 hover:text-rose-700 transition-all"
-                      title="রেকর্ডটি মুছুন"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() =>
+                          setClaimModal({
+                            isOpen: true,
+                            type: "edit",
+                            claim: monthBill,
+                          })
+                        }
+                        className="p-1.5 rounded-lg text-slate-500 hover:bg-rose-100 hover:text-blue-600 transition-all"
+                        title="দাবিকৃত টাকা পরিবর্তন করুন"
+                      >
+                        <Edit2 className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteClaim(monthBill)}
+                        className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-100 hover:text-rose-700 transition-all"
+                        title="রেকর্ডটি মুছুন"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="p-5 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -592,18 +645,38 @@ export default function RoomDetails({ room, onBack }) {
 
                     <div className="flex items-center gap-3 shrink-0">
                       {monthBill.isPaid || monthBill.due === 0 ? (
-                        <span className="flex items-center gap-1.5 bg-emerald-100 text-emerald-800 border border-emerald-300 font-black px-4 py-2 rounded-xl text-sm">
-                          <CheckCircle2 className="h-4 w-4" />
-                          <span>পরিশোধিত</span>
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="flex items-center gap-1.5 bg-emerald-100 text-emerald-800 border border-emerald-300 font-black px-4 py-2 rounded-xl text-sm">
+                            <CheckCircle2 className="h-4 w-4" />
+                            <span>পরিশোধিত</span>
+                          </span>
+                          <button
+                            onClick={() =>
+                              setClaimModal({
+                                isOpen: true,
+                                type: "pay",
+                                claim: monthBill,
+                              })
+                            }
+                            className="text-xs font-bold text-slate-500 hover:text-emerald-700 underline"
+                          >
+                            জমা পরিবর্তন
+                          </button>
+                        </div>
                       ) : (
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-black text-rose-700 bg-rose-100 px-3 py-1.5 rounded-xl">
                             বাকি: {formatCurrency(monthBill.due)}
                           </span>
                           <button
-                            onClick={() => handlePayClaim(monthBill)}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl shadow-xs transition-all active:scale-98"
+                            onClick={() =>
+                              setClaimModal({
+                                isOpen: true,
+                                type: "pay",
+                                claim: monthBill,
+                              })
+                            }
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-xs transition-all active:scale-98"
                           >
                             টাকা জমা নিন
                           </button>
@@ -993,6 +1066,17 @@ export default function RoomDetails({ room, onBack }) {
         roomRent={room.rent}
         currentMonthName={getMonthNameBengali(currentYearMonth)}
         onConfirmRelease={handleConfirmRelease}
+      />
+
+      {/* Custom Claim Payment & Edit Modal */}
+      <ClaimActionModal
+        isOpen={claimModal.isOpen}
+        onClose={() =>
+          setClaimModal({ isOpen: false, type: "pay", claim: null })
+        }
+        claim={claimModal.claim}
+        type={claimModal.type}
+        onConfirm={handleClaimModalConfirm}
       />
     </div>
   );
